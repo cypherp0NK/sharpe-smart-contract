@@ -1,5 +1,4 @@
-from brownie import accounts, Sharpe, SharpeKeeper, config, manualKeeper
-
+from brownie import accounts, Sharpe
 vault = Sharpe[-1]
 def main():
     account = accounts.load("cypherp0NK")

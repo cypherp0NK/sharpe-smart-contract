@@ -1,5 +1,5 @@
 from brownie import accounts, Sharpe
-# This script takes out any foreign token in the vault
+# This script takes out any foreign token sent to the vault
 def main():
     account = accounts.load("cypherp0NK")
     vault = Sharpe[-1]

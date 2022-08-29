@@ -1,11 +1,8 @@
-from brownie import accounts, config, SharpeKeeper
-import web3
-from web3 import Web3
-w3 = Web3(Web3.HTTPProvider("https://eth-rinkeby.alchemyapi.io/v2/df8EeLhkeghe4I-OY-zseSWr7aJseYwt"))
+from brownie import accounts, SharpeKeeper
 
 interval = 43200
 
-vault = "0xeb24a13d7783eEd5716d30e06602083aE09f6DFD"
+vault = "0x9e6A7B0532184c7Eb7DC536E1cA7c7606B299a8f"
 baseThreshold = 100 #2
 limitThreshold = 20 #1
 maxTwapDeviation = 100

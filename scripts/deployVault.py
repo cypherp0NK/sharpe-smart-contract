@@ -1,15 +1,11 @@
-from brownie import accounts, config, Sharpe
-from web3 import Web3
+from brownie import accounts, Sharpe
 
-# POOL = "0xDaC8A8E6DBf8c690ec6815e0fF03491B2770255D" #0.01
+# POOL = "0xDaC8A8E6DBf8c690ec6815e0fF03491B2770255D" #usdc / usdt pool 0.01
 # POOL = "0xbEAf7156bA07C3dF8FAc42E90188c5a752470DB7" #usdc / frax pool 0.05 
-# POOL = "0x7F567cE133B0B69458fC318af06Eee27642865be" #usdc / miMatic pool 0.05
-POOL = "0xDaC8A8E6DBf8c690ec6815e0fF03491B2770255D" #polygon
+POOL = "0x7F567cE133B0B69458fC318af06Eee27642865be" #usdc / miMatic pool 0.05
 ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" #polygon
 PROTOCOL_FEE = 5000
-MAX_SUPPLY =  5000000000 #2500000000002500000000 #5000000000
-
-w3 = Web3(Web3.HTTPProvider("https://polygon-mainnet.g.alchemy.com/v2/2VsZl1VcrmWJ44CvrD9pt1HFieK6TQfZ"))
+MAX_SUPPLY =  2500000000002500000000 #5000000000
 
 def main():
     account = accounts.load("cypherp0NK")

@@ -1,5 +1,5 @@
-from brownie import accounts, Sharpe, SharpeKeeper, config, manualKeeper
-# the manualKeeper contract can be used to run rebalance off-chain without the chainlink inteface
+from brownie import accounts, Sharpe, SharpeKeeper
+# the manualKeeper contract can be used to run rebalance off-chain without the chainlink keepers
 
 vault = Sharpe[-1]
 strategy = SharpeKeeper[-1]
