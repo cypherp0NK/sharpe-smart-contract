@@ -5,9 +5,9 @@ w3 = Web3(Web3.HTTPProvider("https://eth-rinkeby.alchemyapi.io/v2/df8EeLhkeghe4I
 
 interval = 43200
 
-vault = "0x9db685d9E4f2e5A7fAEC5760F2946C32c8422b91"
-baseThreshold = 100
-limitThreshold = 20
+vault = "0xeb24a13d7783eEd5716d30e06602083aE09f6DFD"
+baseThreshold = 100 #2
+limitThreshold = 20 #1
 maxTwapDeviation = 100
 twapDuration = 60
 

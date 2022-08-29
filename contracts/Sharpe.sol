@@ -23,9 +23,9 @@ import "@uniswap/v3-core/contracts/interfaces/pool/IUniswapV3PoolEvents.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PositionKey.sol";
 import "../interfaces/IVault.sol";
-import "../interfaces/IV2SwapRouter.sol";
+import "../interfaces/IUniswapV2Router02.sol";
 
-contract SharpeAI is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,ReentrancyGuard{
+contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,ReentrancyGuard{
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
     event Deposit(address indexed sender,address indexed to,uint256 shares,uint256 amount0,uint256 amount1);
@@ -33,7 +33,7 @@ contract SharpeAI is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,
     event CollectFees(uint256 feesToVault0,uint256 feesToVault1,uint256 feesToProtocol0,uint256 feesToProtocol1);
     event Snapshot(int24 tick, uint256 totalAmount0, uint256 totalAmount1, uint256 totalSupply);
     IUniswapV3Pool public immutable pool;
-    IV2SwapRouter public immutable router;
+    IUniswapV2Router02 public immutable router;
     IERC20 public immutable token0;
     IERC20 public immutable token1;
     int24 public immutable tickSpacing;
@@ -64,9 +64,9 @@ contract SharpeAI is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,
         address _router,
         uint256 _protocolFee,
         uint256 _maxTotalSupply
-    ) ERC20("SharpeAI", "AI") {
+    ) ERC20("Sharpe", "SHRP") {
         pool = IUniswapV3Pool(_pool);
-        router = IV2SwapRouter(_router);
+        router = IUniswapV2Router02(_router);
         token0 = IERC20(IUniswapV3Pool(_pool).token0());
         token1 = IERC20(IUniswapV3Pool(_pool).token1());
         token0Address = IUniswapV3Pool(_pool).token0();
@@ -94,7 +94,7 @@ contract SharpeAI is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,
      * @return amount0 Amount of token0 deposited
      * @return amount1 Amount of token1 deposited
      */
-    function deposit(uint256 amount0Desired,uint256 amount1Desired,uint256 amount0Min,uint256 amount1Min,address to)
+    function deposit(uint256 amount0Desired,uint256 amount1Desired,uint256 amount0Min,uint256 amount1Min, address to)
         external override nonReentrant
         returns (uint256 shares,uint256 amount0,uint256 amount1)
     {
@@ -105,58 +105,83 @@ contract SharpeAI is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,
         _poke(limitLower, limitUpper);
         // Calculate amounts proportional to vault's holdings
         (shares, amount0, amount1) = _calcSharesAndAmounts(amount0Desired, amount1Desired);
-        require(amount0 >= amount0Min, "amount0Min");
-        require(amount1 >= amount1Min, "amount1Min");
-        if (shares == 0){ //when only amount1 or amount2 available splits the amount in two and performs a swap
+        
+        //Perform swap from amount0 to amount1 or from amount1 to amount0 if one of amount0Desired or amount1Desired equals zero
+        if (shares == 0){ 
             require((amount0 > 0 && amount1 == 0) || (amount1 > 0 && amount0 == 0), "amount0 or amount1");
             uint256 totalSupply = totalSupply();
             (uint256 total0, uint256 total1) = getTotalAmounts();
+            // Single Asset Deposit
+            // The goal here is for the vault to hold both tokens at the end even if the user provided just one token
 
             if (amount0 > 0 && amount1 == 0){
-                uint256 amount0ToStore = amount0.div(2);
-                uint256 difference = amount0.sub(amount0ToStore); //the difference is the amount to send to uniswap v2 for swap
+                //1. View amounts of total0 the vault would have if it were to swap all of total1 
+                //to get the vault's total holdings in the amounts of total0 alone.
+                address[] memory path0 = new address[](2);
+                path0[0] = token1Address;
+                path0[1] = token0Address;
+                uint[] memory total1ToTotal0 = router.getAmountsOut(total1, path0);
+
+                //2. Subtract from amount0 in proportion to vault's total holding and send difference for swap.
+                uint256 amount0ToStore = amount0.mul(total0).div(total0.add(total1ToTotal0[1]));
+                uint256 difference = amount0.sub(amount0ToStore); 
                 token0.safeTransferFrom(msg.sender, address(this), amount0); //pulls in single token from recipient
                 token0.approve(routerAddress, difference); //approves router to perform the swap
-                address[] memory path = new address[](2);
-                path[0] = token0Address;
-                path[1] = token1Address;
-                uint256 amount1ToStore = router.swapExactTokensForTokens(difference,0,path,address(this)); //swaps the difference
-                //calculate shares and this time shares should be more than zero
-                (shares, amount0, amount1) = _calcSharesAndAmounts(amount0ToStore, amount1ToStore);
+                address[] memory path1 = new address[](2);
+                path1[0] = token0Address;
+                path1[1] = token1Address;
+                uint[] memory amount1ToStore = router.swapExactTokensForTokens(difference,0,path1,address(this), block.timestamp); //swaps the difference
+                
+                //3. calculate shares according to amount0 stored and amount1 just received
+                uint256 cross = Math.min(amount0ToStore.mul(total1), amount1ToStore[1].mul(total0));
+                amount0 = cross.sub(1).div(total1).add(1);
+                amount1 = cross.sub(1).div(total0).add(1);
+                shares = cross.mul(totalSupply).div(total0).div(total1);
+                require(amount0 >= amount0Min, "amount0Min");
+                require(amount1 >= amount1Min, "amount1Min");
                 require(shares > 0, "swappedShares");
-                uint256 dust0 = amount0ToStore.sub(amount0);
-                uint256 dust1 = amount1ToStore.sub(amount1);
-                // Send any dust from swap transaction back to recipient
-                if (dust0 > 0) token0.safeTransfer(to, dust0);
-                if (dust1 > 0) token1.safeTransfer(to, dust1);
-                // Mint shares to recipient
+                
+                // 4. Send back all dust after getting the actual amount0 and amount1 for vault to store proportional to its holdings
+                if (amount0ToStore.sub(amount0) > 0) token0.safeTransfer(to, amount0ToStore.sub(amount0));
+                if (amount1ToStore[1].sub(amount1) > 0) token1.safeTransfer(to, amount1ToStore[1].sub(amount1));
+                
+                // 5. Mint shares to recipient
                 _mint(to, shares);
                 emit Deposit(msg.sender, to, shares, amount0, amount1);
                 require(totalSupply.add(shares) <= maxTotalSupply, "maxTotalSupply");
             }
             else {
-                uint256 amount1ToStore = amount1.div(2);
+                //opposite of the first logic
+                address[] memory path0 = new address[](2);
+                path0[0] = token0Address;
+                path0[1] = token1Address;
+                uint[] memory total0ToTotal1 = router.getAmountsOut(total0, path0);
+                uint256 amount1ToStore = amount1.mul(total1).div(total1.add(total0ToTotal1[1]));
                 uint256 difference = amount1.sub(amount1ToStore);
                 token1.safeTransferFrom(msg.sender, address(this), amount1);
                 token1.approve(routerAddress, difference);
-                address[] memory path = new address[](2);
-                path[0] = token1Address;
-                path[1] = token0Address;
-                uint256 amount0ToStore = router.swapExactTokensForTokens(difference,0,path,address(this));
-                (shares, amount0, amount1) = _calcSharesAndAmounts(amount0ToStore, amount1ToStore);
+                address[] memory path1 = new address[](2);
+                path1[0] = token1Address;
+                path1[1] = token0Address;
+                uint[] memory amount0ToStore = router.swapExactTokensForTokens(difference,0,path1,address(this), block.timestamp);                uint256 cross = Math.min(amount0ToStore[1].mul(total1), amount1ToStore.mul(total0));
+                amount0 = cross.sub(1).div(total1).add(1);
+                amount1 = cross.sub(1).div(total0).add(1);
+                shares = cross.mul(totalSupply).div(total0).div(total1);
+                require(amount0 >= amount0Min, "amount0Min");
+                require(amount1 >= amount1Min, "amount1Min");
                 require(shares > 0, "swappedShares");
-                uint256 dust0 = amount0ToStore.sub(amount0);
-                uint256 dust1 = amount1ToStore.sub(amount1);
-                // Send any dust from swap transaction back to recipient
-                if (dust0 > 0) token0.safeTransfer(to, dust0);
-                if (dust1 > 0) token1.safeTransfer(to, dust1);
-                // Mint shares to recipient
+                if (amount0ToStore[1].sub(amount0) > 0) token0.safeTransfer(to, amount0ToStore[1].sub(amount0));
+                if (amount1ToStore.sub(amount1) > 0) token1.safeTransfer(to, amount1ToStore.sub(amount1));
                 _mint(to, shares);
                 emit Deposit(msg.sender, to, shares, amount0, amount1);
                 require(totalSupply.add(shares) <= maxTotalSupply, "maxTotalSupply");
             }
         }
-        else { //when both tokens are already available
+
+        //Pull in amount0 and amount1 from recipient as long as both are provided
+        else { 
+            require(amount0 >= amount0Min, "amount0Min");
+            require(amount1 >= amount1Min, "amount1Min");
             require(shares > 0, "shares");
             // Pull in tokens from sender
             if (amount0 > 0) token0.safeTransferFrom(msg.sender, address(this), amount0);
@@ -198,14 +223,18 @@ contract SharpeAI is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,
             amount0 = amount0Desired;
             shares = amount0.mul(totalSupply).div(total0);
         } else {
+            //calculate the amount0 and amount1 to take in from recipient so they are in the same ratio to what the vault currently holds
             require(amount0Desired > 0 || amount1Desired > 0, "atleast one token is needed");
             uint256 cross = Math.min(amount0Desired.mul(total1), amount1Desired.mul(total0));
-            if (cross == 0){ //prepares contract to perform a swap with the single token amount given by setting shares to zero
+            
+            //Tell contract to perform a swap from deposit() with the single token amount given by setting shares to zero
+            if (cross == 0){ 
                 amount0 = amount0Desired;
                 amount1 = amount1Desired;
                 shares = 0;
             }
-            else { //at this point both tokens ara available for deposit and the shares are calculated
+            //When recipient already provides both tokens for deposit the shares are calculated and deposit() skips performing a swap
+            else { 
                 require(cross > 0, "cross");
                 // Round up amounts
                 amount0 = cross.sub(1).div(total1).add(1);
@@ -223,31 +252,77 @@ contract SharpeAI is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,
      * @return amount0 Amount of token0 sent to recipient
      * @return amount1 Amount of token1 sent to recipient
      */
-    function withdraw(uint256 shares,uint256 amount0Min,uint256 amount1Min,address to
+    function withdraw(uint256 shares,uint256 amount0Min,uint256 amount1Min,address to, bool swapToAmount0, bool swapToAmount1
 ) external override nonReentrant returns (uint256 amount0, uint256 amount1) {
         require(shares > 0, "shares");
         require(to != address(0) && to != address(this), "to");
         uint256 totalSupply = totalSupply();
 
-        // Burn shares
+        // Burn recipient's shares
         _burn(msg.sender, shares);
 
+        //Fetches all of recipient's lp tokens
+        (amount0, amount1) = _getTokensFromPosition(shares, totalSupply);
+        
+        // Push tokens to recipient
+        if (swapToAmount0){
+            //Swaps token1 so user receives all assets in token0 only
+            uint256 receivedAmount0 = _zappTokens(amount1, true);
+            amount0 = amount0.add(receivedAmount0);
+            require(amount0 >= amount0Min, "amount0Min");
+            if (amount0 > 0) token0.safeTransfer(to, amount0);
+            emit Withdraw(msg.sender, to, shares, amount0, 0);
+        }
+        else if (swapToAmount1){
+            //Swaps token0 so user receives all assets in token1 only
+            uint256 receivedAmount1 = _zappTokens(amount0, false);
+            amount1 = amount1.add(receivedAmount1);
+            require(amount1 >= amount1Min, "amount1Min");
+            if (amount1 > 0) token1.safeTransfer(to, amount1);
+            emit Withdraw(msg.sender, to, shares, 0, amount1);
+        }
+        else{
+            //Sends both tokens to the recipient
+            require(amount0 >= amount0Min, "amount0Min");
+            require(amount1 >= amount1Min, "amount1Min");
+            if (amount0 > 0) token0.safeTransfer(to, amount0);
+            if (amount1 > 0) token1.safeTransfer(to, amount1);
+            emit Withdraw(msg.sender, to, shares, amount0, amount1);
+        }
+        
+    }
+    /// @dev Performs a swap if recipient wants a single token output at withdrawal.
+    function _zappTokens(uint256 amount, bool output) internal returns(uint256 swappedAmount){
+        if (output){
+            token1.approve(routerAddress, amount);
+            address[] memory path = new address[](2);
+            path[0] = token1Address;
+            path[1] = token0Address;
+            uint[] memory receivedToken = router.swapExactTokensForTokens(amount,0,path,address(this), block.timestamp);
+            swappedAmount = receivedToken[1];
+        }
+        else{
+            token0.approve(routerAddress, amount);
+            address [] memory path = new address[](2);
+            path[0] = token0Address;
+            path[1] = token1Address;
+            uint[] memory receivedToken = router.swapExactTokensForTokens(amount, 0, path, address(this), block.timestamp);
+            swappedAmount = receivedToken[1];
+        }
+    }
+    /// @dev Withdraws recipient's proportion of liquidity and adds all unused amounts.
+    function _getTokensFromPosition(uint256 shares, uint256 totalSupply) internal returns(uint256 amount0, uint256 amount1){
         // Calculate token amounts proportional to unused balances
         uint256 unusedAmount0 = getBalance0().mul(shares).div(totalSupply);
         uint256 unusedAmount1 = getBalance1().mul(shares).div(totalSupply);
-
         // Withdraw proportion of liquidity from Uniswap pool
-        (uint256 baseAmount0, uint256 baseAmount1) = _burnLiquidityShare(baseLower, baseUpper, shares, totalSupply);
-        (uint256 limitAmount0, uint256 limitAmount1) = _burnLiquidityShare(limitLower, limitUpper, shares, totalSupply);
+        (uint256 baseAmount0, uint256 baseAmount1) =
+            _burnLiquidityShare(baseLower, baseUpper, shares, totalSupply);
+        (uint256 limitAmount0, uint256 limitAmount1) =
+            _burnLiquidityShare(limitLower, limitUpper, shares, totalSupply);
         // Sum up total amounts owed to recipient
         amount0 = unusedAmount0.add(baseAmount0).add(limitAmount0);
         amount1 = unusedAmount1.add(baseAmount1).add(limitAmount1);
-        require(amount0 >= amount0Min, "amount0Min");
-        require(amount1 >= amount1Min, "amount1Min");
-        // Push tokens to recipient
-        if (amount0 > 0) token0.safeTransfer(to, amount0);
-        if (amount1 > 0) token1.safeTransfer(to, amount1);
-        emit Withdraw(msg.sender, to, shares, amount0, amount1);
     }
     /// @dev Withdraws share of liquidity in a range from Uniswap pool.
     function _burnLiquidityShare(int24 tickLower,int24 tickUpper,uint256 shares,uint256 totalSupply

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
-import "./SharpeAI.sol";
+import "./Sharpe.sol";
 
 interface KeeperCompatibleInterface{
     function checkUpkeep(bytes calldata checkData) external returns (bool upkeepNeeded, bytes memory performData);
@@ -13,7 +13,7 @@ contract SharpeKeeper is KeeperCompatibleInterface{
     uint256 public immutable interval;
     uint256 public lastTimeStamp;
     using SafeMath for uint256;
-    SharpeAI public immutable vault;
+    Sharpe public immutable vault;
     IUniswapV3Pool public immutable pool;
     int24 public immutable tickSpacing;
 
@@ -26,9 +26,9 @@ contract SharpeKeeper is KeeperCompatibleInterface{
         uint updateInterval, address _vault, int24 _baseThreshold, int24 _limitThreshold, int24 _maxTwapDeviation, uint32 _twapDuration) {
         interval = updateInterval;
         lastTimeStamp = block.timestamp;
-        IUniswapV3Pool _pool = SharpeAI(_vault).pool();
+        IUniswapV3Pool _pool = Sharpe(_vault).pool();
         int24 _tickSpacing = _pool.tickSpacing();
-        vault = SharpeAI(_vault);
+        vault = Sharpe(_vault);
         pool = _pool;
         
         tickSpacing = _tickSpacing;
