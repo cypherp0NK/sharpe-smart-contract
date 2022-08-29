@@ -134,6 +134,7 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
                 
                 //3. calculate shares according to amount0 stored and amount1 just received
                 uint256 cross = Math.min(amount0ToStore.mul(total1), amount1ToStore[1].mul(total0));
+                require(cross > 0, "swappedCross");
                 amount0 = cross.sub(1).div(total1).add(1);
                 amount1 = cross.sub(1).div(total0).add(1);
                 shares = cross.mul(totalSupply).div(total0).div(total1);
@@ -163,7 +164,9 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
                 address[] memory path1 = new address[](2);
                 path1[0] = token1Address;
                 path1[1] = token0Address;
-                uint[] memory amount0ToStore = router.swapExactTokensForTokens(difference,0,path1,address(this), block.timestamp);                uint256 cross = Math.min(amount0ToStore[1].mul(total1), amount1ToStore.mul(total0));
+                uint[] memory amount0ToStore = router.swapExactTokensForTokens(difference,0,path1,address(this), block.timestamp);
+                uint256 cross = Math.min(amount0ToStore[1].mul(total1), amount1ToStore.mul(total0));
+                require(cross > 0, "swappedCross");
                 amount0 = cross.sub(1).div(total1).add(1);
                 amount1 = cross.sub(1).div(total0).add(1);
                 shares = cross.mul(totalSupply).div(total0).div(total1);
@@ -291,7 +294,7 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
         }
         
     }
-    /// @dev Performs a swap if recipient wants a single token output at withdrawal.
+    /// @dev Performs a swap if recipient wants a single token output at point of withdrawal.
     function _zappTokens(uint256 amount, bool output) internal returns(uint256 swappedAmount){
         if (output){
             token1.approve(routerAddress, amount);
