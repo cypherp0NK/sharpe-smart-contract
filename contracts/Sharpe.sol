@@ -265,7 +265,7 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
         (amount0, amount1) = _getTokensFromPosition(shares, totalSupply);
         
         // Push tokens to recipient
-        if (swapToAmount0){
+        if (swapToAmount0 && !swapToAmount1){
             //Swaps token1 so user receives all assets in token0 only
             uint256 receivedAmount0 = _zappTokens(amount1, true);
             amount0 = amount0.add(receivedAmount0);
@@ -273,7 +273,7 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
             if (amount0 > 0) token0.safeTransfer(to, amount0);
             emit Withdraw(msg.sender, to, shares, amount0, 0);
         }
-        else if (swapToAmount1){
+        else if (swapToAmount1 && !swapToAmount0){
             //Swaps token0 so user receives all assets in token1 only
             uint256 receivedAmount1 = _zappTokens(amount0, false);
             amount1 = amount1.add(receivedAmount1);
