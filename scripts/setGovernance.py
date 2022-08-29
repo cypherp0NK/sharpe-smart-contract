@@ -1,6 +1,6 @@
-from brownie import accounts, SharpeAI, SharpeKeeper, config, manualKeeper
+from brownie import accounts, Sharpe, SharpeKeeper, config, manualKeeper
 
-vault = SharpeAI[-1]
+vault = Sharpe[-1]
 def main():
     account = accounts.load("cypherp0NK")
     vault.setGovernance(accounts[2], {"from": account})
