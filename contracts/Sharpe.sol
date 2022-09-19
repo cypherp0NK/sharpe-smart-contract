@@ -30,23 +30,23 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
     event Withdraw(address indexed sender,address indexed to,uint256 shares,uint256 amount0,uint256 amount1);
     event CollectFees(uint256 feesToVault0,uint256 feesToVault1,uint256 feesToProtocol0,uint256 feesToProtocol1);
     event Snapshot(int24 tick, uint256 totalAmount0, uint256 totalAmount1, uint256 totalSupply);
-    IUniswapV3Pool public immutable pool;
     
+    IUniswapV3Pool public immutable pool;
+    int24 public baseLower;
+    int24 public baseUpper;
+    int24 public limitLower;
+    int24 public limitUpper;
     int24 public immutable tickSpacing;
     uint256 public protocolFee;
-    uint256 public maxTotalSupply;
+    uint256 public maxTotalSupply;    
+    uint256 public accruedProtocolFees0;
+    uint256 public accruedProtocolFees1;
     address public immutable token0;
     address public immutable token1;
     address public immutable router;
     address public SharpeKeeper;
     address public governance;
     address public pendingGovernance;
-    int24 public baseLower;
-    int24 public baseUpper;
-    int24 public limitLower;
-    int24 public limitUpper;
-    uint256 public accruedProtocolFees0;
-    uint256 public accruedProtocolFees1;
     /**
      * This vault is mainly for stablecoin pairs
      * dev After deploying, strategy needs to be set by offchain devs
