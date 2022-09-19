@@ -32,11 +32,11 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
     event Snapshot(int24 tick, uint256 totalAmount0, uint256 totalAmount1, uint256 totalSupply);
     
     IUniswapV3Pool public immutable pool;
+    int24 public immutable tickSpacing;
     int24 public baseLower;
     int24 public baseUpper;
     int24 public limitLower;
     int24 public limitUpper;
-    int24 public immutable tickSpacing;
     uint256 public protocolFee;
     uint256 public maxTotalSupply;    
     uint256 public accruedProtocolFees0;
