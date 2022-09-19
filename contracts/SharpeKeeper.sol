@@ -1,7 +1,5 @@
 //SPDX-License-Identifier: Unlicense
 pragma solidity ^0.8.0;
-import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
-import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "./Sharpe.sol";
 
 interface KeeperCompatibleInterface{
@@ -12,7 +10,7 @@ interface KeeperCompatibleInterface{
 contract SharpeKeeper is KeeperCompatibleInterface{
     uint256 public immutable interval;
     uint256 public lastTimeStamp;
-    using SafeMath for uint256;
+    //using SafeMath for uint256;
     Sharpe public immutable vault;
     IUniswapV3Pool public immutable pool;
     int24 public immutable tickSpacing;
