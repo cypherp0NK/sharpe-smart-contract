@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Unlicense
-pragma solidity ^0.8.0;
+pragma solidity 0.8.0;
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3MintCallback.sol";
 import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3SwapCallback.sol";
@@ -25,18 +25,33 @@ import "../interfaces/IVault.sol";
 import "../interfaces/IUniswapV2Router02.sol";
 
 contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,ReentrancyGuard{
+
     using SafeERC20 for IERC20;
     event Deposit(address indexed sender,address indexed to,uint256 shares,uint256 amount0,uint256 amount1);
     event Withdraw(address indexed sender,address indexed to,uint256 shares,uint256 amount0,uint256 amount1);
     event CollectFees(uint256 feesToVault0,uint256 feesToVault1,uint256 feesToProtocol0,uint256 feesToProtocol1);
     event Snapshot(int24 tick, uint256 totalAmount0, uint256 totalAmount1, uint256 totalSupply);
-    
+    event MintCallBack(uint256 amount0, uint256 amount1, bytes data);
+    event SwapCallBack(int256 amount0Delta, int256 amount1Delta, bytes data);
+    event DeviationChange(int24 maxTwapDeviation);
+    event DurationChange(uint32 twapDuration);
+    event ProtocolFeesCollected(address indexed to, uint256 fees0Taken, uint256 fees1Taken, uint256 fees0Left, uint256 fees1Left);
+    event Sweep(address indexed to, address foreignToken, uint256 amount);
+    event SetSharpeKeeper(address indexed sharpeKeeper);
+    event ChangeProtocolFee(uint256 protocolFee);
+    event ChangeMaxSupply(uint256 maxTotalSupply);
+    event EmergencyBurn(int24 tickLower,int24 tickUpper,uint128 liquidity);
+    event PendingGovernance(address indexed governance);
+    event GovernanceAccepted(address indexed newGovernance);
+
     IUniswapV3Pool public immutable pool;
     int24 public immutable tickSpacing;
     int24 public baseLower;
     int24 public baseUpper;
     int24 public limitLower;
     int24 public limitUpper;
+    int24 public maxTwapDeviation;
+    uint32 public twapDuration;
     uint256 public protocolFee;
     uint256 public maxTotalSupply;    
     uint256 public accruedProtocolFees0;
@@ -58,15 +73,21 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
     constructor(
         address _pool,
         address _router,
+        int24 _maxTwapDeviation,
+        uint32 _twapDuration,
         uint256 _protocolFee,
         uint256 _maxTotalSupply
     ) ERC20("Sharpe", "SHRP") {
         require(_protocolFee < 1e6, "protocolFee");
+        require(_maxTwapDeviation > 0, "maxTwapDeviation");
+        require(_twapDuration > 0, "twapDuration");
         pool = IUniswapV3Pool(_pool);
         router = _router;
         token0 = IUniswapV3Pool(_pool).token0();
         token1 = IUniswapV3Pool(_pool).token1();
         tickSpacing = IUniswapV3Pool(_pool).tickSpacing();
+        maxTwapDeviation = _maxTwapDeviation;
+        twapDuration = _twapDuration;
         protocolFee = _protocolFee;
         maxTotalSupply = _maxTotalSupply;
         governance = msg.sender;
@@ -338,7 +359,7 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
         _checkRange(_baseLower, _baseUpper);
         _checkRange(_bidLower, _bidUpper);
         _checkRange(_askLower, _askUpper);
-        (, int24 tick, , , , , ) = pool.slot0();
+        int24 tick = _getTick();
         require(_bidUpper <= tick, "bidUpper");
         require(_askLower > tick, "askLower"); // inequality is strict as tick is rounded down
         // Withdraw all current liquidity from Uniswap pool
@@ -375,6 +396,21 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
             (limitLower, limitUpper) = (_askLower, _askUpper);
         }
     }
+    /// @dev Fetches tick and ensures tick value is relatively close to the value of
+    /// time-weighted average price.
+    function _getTick() internal view returns (int24){
+        (, int24 tick, , , , , ) = pool.slot0();
+        uint32 _twapDuration = twapDuration;
+        uint32[] memory secondsAgo = new uint32[](2);
+        secondsAgo[0] = _twapDuration;
+        secondsAgo[1] = 0;
+        (int56[] memory tickCumulatives, ) = pool.observe(secondsAgo);
+        int24 twap = int24((tickCumulatives[1] - tickCumulatives[0]) / _twapDuration);
+        int24 deviation = tick > twap ? tick - twap : twap - tick;
+        assert(deviation <= maxTwapDeviation);
+        return tick;
+    }
+
     function _checkRange(int24 tickLower, int24 tickUpper) internal view {
         int24 _tickSpacing = tickSpacing;
         require(tickLower < tickUpper, "tickLower < tickUpper");
@@ -423,8 +459,7 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
      */
     function getTotalAmounts() public view override returns (uint256 total0, uint256 total1) {
         (uint256 baseAmount0, uint256 baseAmount1) = getPositionAmounts(baseLower, baseUpper);
-        (uint256 limitAmount0, uint256 limitAmount1) =
-            getPositionAmounts(limitLower, limitUpper);
+        (uint256 limitAmount0, uint256 limitAmount1) = getPositionAmounts(limitLower, limitUpper);
         total0 = getBalance0() + baseAmount0 + limitAmount0;
         total1 = getBalance1() + baseAmount1 + limitAmount1;
     }
@@ -489,16 +524,35 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
     }
     /// @dev Callback for Uniswap V3 pool.
     function uniswapV3MintCallback(uint256 amount0,uint256 amount1,bytes calldata data) external override {
-        require(msg.sender == address(pool));
+        require(msg.sender == address(pool), "liquidity pool");
         if (amount0 > 0) IERC20(token0).safeTransfer(msg.sender, amount0);
         if (amount1 > 0) IERC20(token1).safeTransfer(msg.sender, amount1);
+        emit MintCallBack(amount0, amount1, data);
     }
     /// @dev Callback for Uniswap V3 pool.
     function uniswapV3SwapCallback(int256 amount0Delta,int256 amount1Delta,bytes calldata data) external override {
-        require(msg.sender == address(pool));
+        require(msg.sender == address(pool), "liquidity pool");
         if (amount0Delta > 0) IERC20(token0).safeTransfer(msg.sender, uint256(amount0Delta));
         if (amount1Delta > 0) IERC20(token1).safeTransfer(msg.sender, uint256(amount1Delta));
+        emit SwapCallBack(amount0Delta, amount1Delta, data);
     }
+    /**
+     * @notice Change maximum price deviation of twap compared to tick.
+     */
+    function setMaxTwapDeviation(int24 _maxTwapDeviation) external onlyGovernance {
+        require(_maxTwapDeviation > 0, "maxTwapDeviation");
+        maxTwapDeviation = _maxTwapDeviation;
+        emit DeviationChange(maxTwapDeviation);
+    }
+    /**
+     * @notice Change the duration for Time Weighted Average Price.
+     */
+    function setTwapDuration(uint32 _twapDuration) external onlyGovernance {
+        require(_twapDuration > 0, "twapDuration");
+        twapDuration = _twapDuration;
+        emit DurationChange(twapDuration);
+    }
+
     /**
      * @notice Used to collect accumulated protocol fees.
      */
@@ -507,6 +561,7 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
         accruedProtocolFees1 = accruedProtocolFees1 - amount1;
         if (amount0 > 0) IERC20(token0).safeTransfer(to, amount0);
         if (amount1 > 0) IERC20(token1).safeTransfer(to, amount1);
+        emit ProtocolFeesCollected(to, amount0, amount1, accruedProtocolFees0, accruedProtocolFees1);
     }
     /**
      * @notice Removes tokens accidentally sent to this vault.
@@ -514,12 +569,16 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
     function sweep(address token,uint256 amount,address to) external onlyGovernance {
         require(token != token0 && token != token1, "token");
         IERC20(token).safeTransfer(to, amount);
+        emit Sweep(to, token, amount);
     }
     /**
      * @notice set SharpeKeeper Used to set the strategy contract that determines the position ranges and calls rebalance().
      * Must be called after this vault is deployed.
      */
-    function setSharpeKeeper(address _SharpeKeeper) external onlyGovernance {SharpeKeeper = _SharpeKeeper;}
+    function setSharpeKeeper(address _SharpeKeeper) external onlyGovernance {
+        SharpeKeeper = _SharpeKeeper;
+        emit SetSharpeKeeper(SharpeKeeper);
+    }
     /**
      * @notice Used to change the protocol fee charged on pool fees earned from
      * Uniswap, expressed as multiple of 1e-6.
@@ -527,31 +586,40 @@ contract Sharpe is IVault,IUniswapV3MintCallback,IUniswapV3SwapCallback,ERC20,Re
     function setProtocolFee(uint256 _protocolFee) external onlyGovernance {
         require(_protocolFee < 1e6, "protocolFee");
         protocolFee = _protocolFee;
+        emit ChangeProtocolFee(protocolFee);
     }
     /**
      * @notice Used to change deposit cap for a guarded launch or to ensure vault doesn't 
      * grow too large relative to the pool. Cap is on total supply rather than amounts 
      * of token0 and token1 as those amounts fluctuate naturally over time.
      */
-    function setMaxTotalSupply(uint256 _maxTotalSupply) external onlyGovernance { maxTotalSupply = _maxTotalSupply;}
+    function setMaxTotalSupply(uint256 _maxTotalSupply) external onlyGovernance {
+        maxTotalSupply = _maxTotalSupply;
+        emit ChangeMaxSupply(maxTotalSupply);
+    }
     /**
      * @notice Removes liquidity in case of emergency.
      */
     function emergencyBurn(int24 tickLower,int24 tickUpper,uint128 liquidity) external onlyGovernance {
         pool.burn(tickLower, tickUpper, liquidity);
         pool.collect(address(this), tickLower, tickUpper, type(uint128).max, type(uint128).max);
+        emit EmergencyBurn(tickLower, tickUpper, liquidity);
     }
     /**
      * @notice Governance address is not updated until the new governance
      * address has called `acceptGovernance()` to accept this responsibility.
      */
-    function setGovernance(address _governance) external onlyGovernance { pendingGovernance = _governance;}
+    function setGovernance(address _governance) external onlyGovernance {
+        pendingGovernance = _governance;
+        emit PendingGovernance(pendingGovernance);
+    }
     /**
      * @notice `setGovernance()` should be called by the existing governance address prior to calling this function.
      */
     function acceptGovernance() external {
         require(msg.sender == pendingGovernance, "pendingGovernance");
         governance = msg.sender;
+        emit GovernanceAccepted(governance);
     }
     modifier onlyGovernance {
         require(msg.sender == governance, "governance");
