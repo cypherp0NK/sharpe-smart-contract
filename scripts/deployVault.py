@@ -4,9 +4,12 @@ POOL = "0xDaC8A8E6DBf8c690ec6815e0fF03491B2770255D" #usdc / usdt pool 0.01
 # POOL = "0xbEAf7156bA07C3dF8FAc42E90188c5a752470DB7" #usdc / frax pool 0.05 
 # POOL = "0x7F567cE133B0B69458fC318af06Eee27642865be" #usdc / miMatic pool 0.05
 ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" #polygon
+MAX_TWAP_DEVIATION = 100
+TWAP_DURATION = 60
 PROTOCOL_FEE = 5000
 MAX_SUPPLY =  5000000000 #2500000000002500000000 #5000000000
 
+
 def main():
     account = accounts.load("cypherp0NK")
-    vault = account.deploy(Sharpe, POOL, ROUTER, PROTOCOL_FEE, MAX_SUPPLY, publish_source=True)
+    vault = account.deploy(Sharpe, POOL, ROUTER, MAX_TWAP_DEVIATION, TWAP_DURATION, PROTOCOL_FEE, MAX_SUPPLY, publish_source=True)
